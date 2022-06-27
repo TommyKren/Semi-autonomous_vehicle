@@ -1,0 +1,482 @@
+#include <MPU6050_tockn.h>
+#include <Wire.h>
+#include <NewPing.h>
+
+//==============================================================================================
+//  komunikacni piny pro rizeni motoru
+#define motorLeftForward    11
+#define motorLeftBackward   10
+
+#define motorRightForward   5
+#define motorRightBackward  6
+
+//  rychlost motoru pro zatoceni (0-255)
+#define steeringSpeed       150
+
+//  rychlost pohybu motoru dopredu (0-255)
+#define ridingSpeed         150
+
+//  uhel zatoceni hodnoty (0-255)
+#define steeringAngle       30
+
+//  doba pohybu vpred (0-255) sekundy
+#define ridingTimeForward   10
+
+//  doba pohybu vzad (0-255) sekundy
+#define ridingTimeBackward  5
+
+//  piny pro ultrazvukovy meric vzdalenosti
+#define pinTrigger          2
+#define pinEcho             3
+
+//  vzdalenosti objektu (0-255) cm
+#define maxDistance         5
+
+//  adresa I2C eeprom
+#define eepromAdress        0x50
+
+//  velikost I2C eeprom (počet kB)
+#define eepromAdress        256
+
+//  piny pro rezimy rizeni
+#define modeSetting         A3
+
+//  limity pro analogovy prepinac rezimu
+//  programovaci mod (V)
+#define modeProgram         2
+//  mod pro jizdu podle instrukci z pameti (V)
+#define modeAuto            4
+//  mod pro dalkove ovladani (V)
+#define modeControl         6
+
+//==============================================================================================
+//  promena rezimu
+uint8_t modeFunction = 0;
+
+//  ridici prikaz interpretovany a prelozeny na 3 Byty
+byte translatedInstruction[] = {0x00,0x00,0x00};
+
+//  pocet nactenych instrukci
+uint8_t usedInstructionsCount = 0;
+
+//==============================================================================================
+//  objekt gyroskopu
+MPU6050 mpu6050(Wire);
+
+//  Objekt sonaru
+NewPing sonar(pinTrigger, pinEcho, maxDistance);
+
+//==============================================================================================
+//  deklarace funkci
+
+//  funkce s vystupem
+int selectMode();
+bool isSomethingThere (uint8_t);
+bool writeByteToMemory(byte writingByte, uint8_t writingAdress);
+byte readByteFromMemory(uint8_t readingAdress);
+bool writeInstructionFromSerial();
+
+//  provadeci funkce
+void goForward(uint8_t, uint8_t);
+void goBackward(uint8_t, uint8_t);
+void steeringRight(uint8_t, uint8_t);
+void steeringLeft(uint8_t, uint8_t);
+
+//==============================================================================================
+//  inicializacni funkce
+
+void setup() {
+  
+  //  inicializace vystupu pro rizeni motoru
+  pinMode(motorLeftForward, OUTPUT);
+  pinMode(motorLeftBackward, OUTPUT);
+  pinMode(motorRightForward, OUTPUT);
+  pinMode(motorRightBackward, OUTPUT);
+ 
+  //  inicializace seriove komunikace
+  Serial.begin(9600);
+
+  //  nacteni funkcniho rezimu
+  modeFunction = selectMode();
+  
+  //  nastartovani sbernice I2C
+  Wire.begin();
+  //  startovani gyra
+  mpu6050.begin();
+  //  kalibrace gyra
+  mpu6050.calcGyroOffsets(true);
+  
+  Serial.println("");
+  Serial.println("");
+  Serial.println("A jedem");
+  Serial.println("");
+}
+
+//==============================================================================================
+//  hlavni funkce
+
+void loop() {
+  //  nastaveni rezimu
+  switch(modeFunction){
+    
+    //==============================================================================================
+    //  nastaveni rezimu programovani pohybu pomoci instrukci
+    case 1:
+      //  Serial.println("========================================");
+      //  Serial.println("Rezim programovani je nedostupny");
+      writeInstructionFromSerial();  
+      break;
+      
+    //==============================================================================================
+    //  nastaveni rezimu automatickeho pohybu podle instrukci
+    case 2:
+      Serial.println("========================================");
+      Serial.println("Rezim automaticke jizdy je nedostupny");
+      
+      //  ziskani dat z akcelerometru
+      mpu6050.update();
+      //  vypis uhlu naklonu do seriove linky
+      Serial.println("========================================");
+      Serial.print(mpu6050.getAngleX());
+      Serial.print(" ");
+      Serial.print(mpu6050.getAngleY());
+      Serial.print(" ");
+      Serial.println(mpu6050.getAngleZ());
+      break;
+      
+    //==============================================================================================
+    //  nastaveni rezimu programovani pohybu
+    case 3:
+      Serial.println("========================================");
+      Serial.println("Rezim dalkoveho ovladani je nedostupny");      
+      break;
+    
+    //==============================================================================================
+    default:
+      Serial.println("========================================");
+      Serial.println("Chyba volby rezimu");
+      break;
+  }
+  delay(50);
+  return;
+}
+
+//==============================================================================================
+//  funkce pro volbu rezimu
+
+int selectMode(){
+  if(analogRead(modeSetting)<=map(5,0,5,0,1023)&&analogRead(modeSetting)>0){
+    Serial.println("");
+    Serial.print("Vstup z volice je ");
+    Serial.print(map(analogRead(modeSetting),0,1023,0,5));
+    Serial.println(" V");
+  }
+  else{
+    Serial.println("");
+    Serial.println("Chyba volice rezimu");
+    Serial.print("Vstup z volice je ");
+    Serial.print(map(analogRead(modeSetting),0,1023,0,5));
+    Serial.println(" V");
+    return 0;
+  }
+   
+  // zvoleni funkcniho rezimu
+  if(analogRead(modeSetting)<=map(modeProgram,0,5,0,1023)){
+    Serial.println("");
+    Serial.print("Zvolen rezim ");
+    Serial.println(1);
+    return 1;
+  }
+  else if(analogRead(modeSetting)<=map(modeAuto,0,5,0,1023)){
+    Serial.println("");
+    Serial.print("Zvolen rezim ");
+    Serial.println(2);
+    return 2;
+  }
+  else if(analogRead(modeSetting)<=map(modeControl,0,5,0,1023)){
+    Serial.println("");
+    Serial.print("Zvolen rezim ");
+    Serial.println(3);
+    return 3;
+  }
+  else{return 0;}
+}
+
+//==============================================================================================
+//  funkce pro zataceni doprava
+
+void steeringRight(uint8_t steeringAngleValue, uint8_t steeringSpeedValue){
+  mpu6050.update();
+  float requiredDirectionAngle = mpu6050.getAngleZ() - steeringAngleValue;
+  analogWrite(motorLeftForward, steeringSpeedValue);
+  do {
+    delay(50);
+    //  Serial.println(mpu6050.getAngleZ());
+    mpu6050.update();
+      } while (mpu6050.getAngleZ() > requiredDirectionAngle);
+  
+  analogWrite(motorLeftForward, 0);
+
+  Serial.println("========================================");
+  Serial.println("Zatoceno doprava");
+  
+  //  Testovaci funkce
+  /*Serial.print("pozadovany uhel - ");
+  Serial.println(requiredDirectionAngle-2);
+  
+  if(mpu6050.getAngleZ() < requiredDirectionAngle + 2 && mpu6050.getAngleZ() > requiredDirectionAngle - 2){
+    Serial.print("OK - ");
+    Serial.println(mpu6050.getAngleZ());}
+  else{
+    Serial.print("chyba - ");
+    Serial.println(mpu6050.getAngleZ());}*/
+}
+
+//==============================================================================================
+//  funkce pro zataceni doleva
+
+void steeringLeft(uint8_t changeDirectionAngle, uint8_t steeringSpeedValue){
+  mpu6050.update();
+  float requiredDirectionAngle = mpu6050.getAngleZ() + changeDirectionAngle;
+  analogWrite(motorRightForward, steeringSpeedValue);
+  do {
+    delay(50);
+    //  Serial.println(mpu6050.getAngleZ());
+    mpu6050.update();
+  } while (mpu6050.getAngleZ() < requiredDirectionAngle);
+  
+  analogWrite(motorRightForward, 0);
+
+  Serial.println("========================================");
+  Serial.println("Zatoceno doleva");
+}
+
+//==============================================================================================
+//  funkce pro jizdu dopredu
+
+void goForward(uint8_t ridingTimeValue, uint8_t ridingSpeedValue){
+  // urceni vychoziho stavu
+  mpu6050.update();
+  float defaultDirectionAngle = mpu6050.getAngleZ();
+  uint8_t defaultTime = millis() / 1000;
+  Serial.println("========================================");
+  Serial.print("Vychozi cas ");
+  Serial.print(defaultTime);
+  Serial.println(" s");
+  // spusteni motoru
+  analogWrite(motorRightForward, ridingSpeedValue);
+  analogWrite(motorLeftForward, ridingSpeedValue);
+  // cyklus pro pohyb s podminkou pro dobu jizdy
+  do {
+    // aktualizace dat z gyroskopu v kazde iteraci
+    delay(100);
+    mpu6050.update();
+    // overeni prekazky
+    if (isSomethingThere(maxDistance) == true){
+      analogWrite(motorRightForward, 0);
+      analogWrite(motorLeftForward, 0);
+      Serial.println("========================================");
+      Serial.println("Prekazka");
+      return;
+      }
+    // korekce doprava
+    else if (mpu6050.getAngleZ() < defaultDirectionAngle - 2){
+        analogWrite(motorRightForward, ridingSpeedValue + 50);
+        Serial.println("Vychyleni doprava");
+      }
+    // korekce doleva
+    else if (mpu6050.getAngleZ() > defaultDirectionAngle + 2){
+        analogWrite(motorLeftForward, ridingSpeedValue + 50);
+        Serial.println("Vychyleni doleva");
+      }
+    // jizda rovne
+    else {
+        analogWrite(motorRightForward, ridingSpeedValue);
+        analogWrite(motorLeftForward, ridingSpeedValue);
+        Serial.println("Jedu rovne");
+      }
+  } while (millis()/1000 - defaultTime < ridingTimeValue);
+  // zastaveni motoru
+  analogWrite(motorRightForward, 0);
+  analogWrite(motorLeftForward, 0);
+  
+  Serial.print("Dojeto na misto v case ");
+  Serial.print(millis()/1000);
+  Serial.println(" s");
+  }
+
+//==============================================================================================
+//  funkce pro jizdu dozadu
+
+void goBackward(uint8_t ridingTimeValue, uint8_t ridingSpeedValue){
+  
+  }
+
+//==============================================================================================
+//  funkce pro detekci objektu v urcite vzdalenosti
+
+bool isSomethingThere (uint8_t maxDist){
+  // načtení vzdálenosti v centimetrech do vytvořené proměnné vzdalenost
+  int detectDistance = sonar.ping_cm(maxDist);
+  // pokud byla detekována vzdálenost větší než 0, neco tam je a koncime true
+  if (detectDistance > 0) {
+    return true;
+    }  
+  // ve zbylich pripadech vracime "nikde nic"
+  else {
+    return false;
+  }
+}
+
+//==============================================================================================
+//  funkce pro zapsani prikazu na pamet eeprom ze seriove linky
+
+void writeInstructionsToMemory(){
+  
+}
+
+//==============================================================================================
+//  funkce pro zapsani prikazu na pamet eeprom ze seriove linky
+
+bool writeInstructionFromSerial(){
+  //  byte pro hodnotu ze seriove linky
+  byte byteFromSerial;
+  //  pocet mezer v prikazu
+  uint8_t spaceCount = 0;
+  Serial.println("========================================");
+  Serial.println("Zadejte příkaz ve formatu { F(000-255) (000-255) (000-255) }");Serial.println("");
+  //  cekani na seriovou linku
+  while (Serial.available() == 0) {
+    delay(500);
+  }
+  //  promene pro zapisovani a cteni
+  String readValue = ("000");
+  uint8_t i = 0;
+  //  nacteni prvniho bytu
+  byteFromSerial = Serial.read();
+  //  cyklus pro nacteni 
+  do{
+    //  podminka pro interpretaci specialnich znaku
+    switch(int(byteFromSerial)){
+      
+      //==============================================================================================
+      //  Znak na konci zadavaci sekvence (ASCII E)
+      case 69:
+        Serial.println("Sekvence ulozena, prepnete rezim a resetujte");Serial.println("");
+        Serial.println("========================================");
+        break;
+        
+      //==============================================================================================
+      //  Prvni znak oznaceni funkce (ASCII F)
+      case 70:
+        i = 0;
+        spaceCount++;
+        break;
+
+      //==============================================================================================
+      //  Znak mezery (ASCII Space)
+      case 32:
+      
+        Serial.print("--------");Serial.print(usedInstructionsCount);Serial.println(". prikaz zadan--------");
+        Serial.println("");
+        break;
+        
+      //==============================================================================================
+      // Znak pro odradkovani (ASCII ENTER)
+      case 10:
+        for (byte j = 0; j < spaceCount;j++){
+        if (writeByteToMemory(translatedInstruction[j],usedInstructionsCount+j) == true){
+          ;
+        }
+        Serial.print("--------");Serial.print(usedInstructionsCount);Serial.println(". prikaz akceptovan a ulozen--------");
+        Serial.println("");
+        break;
+        }
+        
+      //==============================================================================================
+      //  hodnoty a jejich prevedeni a zapsani 
+      default:
+        if (isDigit(char(byteFromSerial))==false){
+          Serial.print("--------");Serial.print(usedInstructionsCount);Serial.println(". prikaz CHYBA--------");
+          Serial.println("");
+          return false;
+        }
+        readValue[i] = char(byteFromSerial);
+        translatedInstruction[spaceCount] = byte(readValue.toInt());
+        break;
+     }
+     Serial.println("========================================");
+     Serial.println("Zadejte další příkaz");Serial.println("");
+     byteFromSerial = Serial.read();
+     
+   }while (byteFromSerial == 69);
+   
+   while (Serial.available() != 0) {
+      byteFromSerial = Serial.read();
+      delay(50);
+   }
+   Serial.println("Sekvence ulozena, prepnete rezim a resetujte");Serial.println("");
+   Serial.println("========================================");
+  
+}
+
+//==============================================================================================
+//  funkce pro zapsani znaku do eeprom na adresu
+
+bool writeByteToMemory(byte writingByte, uint8_t writingAdress){
+  // inicalizace komunikace s EEPROM
+  Wire.beginTransmission(eepromAdress);
+  // odesleme jeden byte s adresou v paměti
+  Wire.write(writingAdress);
+  // zapíšeme data
+  Wire.write(writingByte);
+  // pocka na zapsani
+  delay(10);
+  // ukončí komunikaci ze pamětí
+  Wire.endTransmission();
+  // pripravime promenou pro porovnani
+  byte byteEEPROM = 0xFF;
+  // nastavení adresy paměti
+  Wire.beginTransmission(eepromAdress);
+  // adresa hodnoty  v EEPROM
+  Wire.write(writingAdress);
+  // ukončení odesílání dat
+  Wire.endTransmission();
+  // čekáme na jeden byte
+  Wire.requestFrom(eepromAdress,1);
+  // když je komunikace aktivní přečti byte
+  if (Wire.available()) byteEEPROM = Wire.read();
+  delay(10);
+  // kontrola zapsaneho bytu
+  if (byteEEPROM == writingByte){
+    Serial.print("zapsano: ");
+    Serial.print((byte)writingByte);
+    return true;
+  }
+  else{
+    Serial.print("Chyba v zapisu nebo cteni bytu: ");
+    Serial.print((byte)writingByte);
+    return false;
+  }
+  return false;
+}
+
+//==============================================================================================
+//  funkce pro vyvolani znaku do eeprom na adrese
+
+byte readByteFromMemory(uint8_t readingAdress){
+  // pripravime promenou pro vycteni
+  byte byteEEPROM = 0xFF;
+  // nastaveni adresy pameti
+  Wire.beginTransmission(eepromAdress);
+  // adresa hodnoty  v EEPROM
+  Wire.write(readingAdress);
+  // ukonceni odesilani dat
+  Wire.endTransmission();
+  // cekame na jeden byte
+  Wire.requestFrom(eepromAdress,1);
+  // kdyz je komunikace aktivni precti a predej dal byte
+  if (Wire.available()) byteEEPROM = Wire.read();
+  delay(10);
+  return byteEEPROM;
+}
